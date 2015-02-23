@@ -577,7 +577,7 @@ do_read(struct bufferevent_openssl *bev_ssl, int n_to_read) {
 	/* Requires lock */
 	struct bufferevent *bev = &bev_ssl->bev.bev;
 	struct evbuffer *input = bev->input;
-	int r, n, i, n_used = 0, atmost;
+	int r, n, i, n_used = 0, atmost, is_conn_closed = 0, err = 0;
 	struct evbuffer_iovec space[2];
 	int result = 0;
 
@@ -605,7 +605,7 @@ do_read(struct bufferevent_openssl *bev_ssl, int n_to_read) {
 			space[i].iov_len = r;
 			decrement_buckets(bev_ssl);
 		} else {
-			int err = SSL_get_error(bev_ssl->ssl, r);
+			err = SSL_get_error(bev_ssl->ssl, r);
 			print_err(err);
 			switch (err) {
 			case SSL_ERROR_WANT_READ:
@@ -622,7 +622,7 @@ do_read(struct bufferevent_openssl *bev_ssl, int n_to_read) {
 						return OP_ERR | result;
 				break;
 			default:
-				conn_closed(bev_ssl, BEV_EVENT_READING, err, r);
+				is_conn_closed = 1;
 				break;
 			}
 			result |= OP_BLOCKED;
@@ -634,6 +634,15 @@ do_read(struct bufferevent_openssl *bev_ssl, int n_to_read) {
 		evbuffer_commit_space(input, space, n_used);
 		if (bev_ssl->underlying)
 			BEV_RESET_GENERIC_READ_TIMEOUT(bev);
+	}
+
+	if (is_conn_closed) {
+		if (n_used) {
+			printf("Warning: hit a libevent error in %s:%d\n",
+				   __FILE__, __LINE__);
+			fflush(stdout);
+		}
+		conn_closed(bev_ssl, BEV_EVENT_READING, err, r);
 	}
 
 	return result;
